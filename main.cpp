@@ -28,25 +28,36 @@ struct PhongShader : IShader {
         return Perspective * gl_Position;                         // in clip coordinates
     }
 
-    virtual std::pair<bool,TGAColor> fragment(const vec3 bar) const {
-        TGAColor gl_FragColor = {255, 255, 255, 255};             // output color of the fragment
-//      vec3 n = normalized(cross(tri[1]-tri[0], tri[2]-tri[0])); // triangle normal in eye coordinates
-        // vec3 n = normalized(varying_nrm[0] * bar[0] +
-        //                     varying_nrm[1] * bar[1] +
-        //                     varying_nrm[2] * bar[2]);             // per-vertex normal interpolation
-        // vec3 r = normalized(n * (n * l)*2 - l);                   // reflected light direction
+    virtual std::pair<bool, TGAColor> fragment(const vec3 bar) const {
+        // 1. 插值计算当前像素对应的 UV 坐标
         vec2 uv = varying_uv[0] * bar[0] + varying_uv[1] * bar[1] + varying_uv[2] * bar[2];
+
+        // 2. 【核心修改】：不再使用纯白色，而是从模型读取颜色贴图在这个 UV 点的颜色
+        TGAColor color = model.diffuse(uv); 
+
+        // 3. 计算法线（从法线贴图采样并变换到眼坐标系）
         vec4 n = normalized(ModelView.invert_transpose() * model.normal(uv));
-        vec4 r = normalized(n * (n * l)*2 - l);                   // reflected light direction
-        double ambient = .3;                                      // ambient light intensity
-        double diff = std::max(0., n * l);                        // diffuse light intensity
-        double spec = std::pow(std::max(r.z, 0.), 35);            // specular intensity, note that the camera lies on the z-axis (in eye coordinates), therefore simple r.z, since (0,0,1)*(r.x, r.y, r.z) = r.z
-        for (int channel : {0,1,2})
-            gl_FragColor[channel] *= std::min(1., ambient + .4*diff + .9*spec);
-        return {false, gl_FragColor};                             // do not discard the pixel
+        
+        // 4. 计算反射光方向 (用于镜面高光)
+        vec4 r = normalized(n * (n * l) * 2. - l); 
+
+        // 5. 计算光照分量
+        double ambient = 0.6;                                     // 环境光（给一点基础亮度，防止全黑）
+        double diff = std::max(0., n * l);                        // 漫反射强度
+        double spec = std::pow(std::max(r.z, 0.), 35);            // 镜面高光强度
+
+        // 6. 组合最终颜色
+        TGAColor gl_FragColor;
+        for (int i : {0, 1, 2}) { // 分别处理 R, G, B 三个通道
+            // 公式：最终颜色 = 贴图颜色 * (环境光 + 漫反射 + 高光)
+            // 注意：加法项的权重可以根据视觉效果微调，比如 0.8*diff + 0.2*spec
+            double intensity = ambient + diff + 0.6 * spec; 
+            gl_FragColor[i] = (unsigned char)std::min(255., color[i] * intensity);
+        }
+
+        return {false, gl_FragColor};
     }
 };
-
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " obj/model.obj" << std::endl;
